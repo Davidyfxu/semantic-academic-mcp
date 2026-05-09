@@ -1,8 +1,9 @@
 """
-Paper Search MCP Server — wraps the paper search API for MCP clients.
+Paper Search MCP Server — wraps the paper and author graph APIs for MCP clients.
 
 Tools exposed:
   - paper_search: Search scholarly papers by natural language query.
+  - author_search: Search authors by name via the author search endpoint.
 
 Transport: SSE via ``mcp.sse_app()`` on Cloudflare Workers (Durable Object).
 """
@@ -44,8 +45,9 @@ def setup_server(env: Any = None):
 
     mcp = FastMCP(
         name="Paper Search",
-        instructions="""Use this server to search scholarly papers by query and return
-title, abstract, publication year, citation count, and links.""",
+        instructions="""Use this server to search scholarly papers by query, or search
+authors by name. Paper results include title, abstract, year, citations, and links.
+Author search supports optional field projection (including nested paper fields).""",
     )
 
     def _paper_api_key_from_context(ctx: Context) -> str:
@@ -173,8 +175,7 @@ title, abstract, publication year, citation count, and links.""",
             "query": query.strip(),
             "limit": limit,
             "fields": (
-                "title,abstract,year,citationCount,url,openAccessPdf,"
-                "externalIds,fieldsOfStudy"
+                "title,abstract,year,citationCount,url,openAccessPdf,externalIds,fieldsOfStudy"
             ),
         }
 
@@ -218,6 +219,135 @@ title, abstract, publication year, citation count, and links.""",
             )
 
         return "\n".join(lines)
+
+    def _format_author_block(author: dict[str, Any], max_papers_shown: int = 30) -> list[str]:
+        """Turn one author JSON object into readable lines (shape depends on requested fields)."""
+        lines: list[str] = []
+        name = author.get("name") or "(no name)"
+        author_id = author.get("authorId") or "N/A"
+        lines.append(f"{name}")
+        lines.append(f"   authorId: {author_id}")
+        if author.get("url"):
+            lines.append(f"   URL: {author['url']}")
+        for key in ("paperCount", "citationCount", "hIndex", "homepage"):
+            if key in author and author[key] not in (None, ""):
+                lines.append(f"   {key}: {author[key]}")
+        aff = author.get("affiliations")
+        if isinstance(aff, list) and aff:
+            lines.append(f"   affiliations: {', '.join(str(x) for x in aff)}")
+
+        papers = author.get("papers")
+        if isinstance(papers, list) and papers:
+            lines.append("   Papers:")
+            shown = papers[:max_papers_shown]
+            for p in shown:
+                if not isinstance(p, dict):
+                    continue
+                title = p.get("title") or "(no title)"
+                year = p.get("year", "N/A")
+                pid = p.get("paperId") or ""
+                suffix = f"  id={pid}" if pid else ""
+                lines.append(f"     - [{year}] {title}{suffix}")
+            extra = len(papers) - len(shown)
+            if extra > 0:
+                lines.append(
+                    f"     ... {extra} more paper(s) not shown (narrow `fields` or `limit`)"
+                )
+        return lines
+
+    @mcp.tool()
+    async def author_search(
+        query: str,
+        ctx: Context,
+        fields: str | None = None,
+        limit: int = 30,
+        offset: int = 0,
+    ) -> str:
+        """Search authors by plain-text name (Semantic Scholar graph API).
+
+        Omit ``fields`` to get only ``authorId`` and ``name`` per author. Use a
+        comma-separated list to request more data; use dot notation for nested
+        paper fields, e.g. ``papers.title,papers.year``. Including ``papers``
+        returns linked papers per author — combine with a modest ``limit`` to
+        keep responses small and fast. Hyphenated query tokens may not match;
+        prefer spaces.
+
+        Parameters
+        ----------
+        query : str
+            Plain-text author name search (no special query syntax).
+        fields : str, optional
+            Comma-separated fields to return (``authorId`` is always included).
+        limit : int
+            Max authors in this batch (1-1000). Default 30.
+        offset : int
+            Pagination offset into the result list (>= 0). Default 0.
+        """
+        paper_api_key = _paper_api_key_from_context(ctx)
+        if not paper_api_key:
+            return (
+                "Error: missing paper API key. Configure X-Paper-API-Key in "
+                "your MCP client headers, or set PAPER_API_KEY on the Worker."
+            )
+
+        if not query.strip():
+            return "Error: 'query' must be a non-empty string."
+        if not (1 <= limit <= 1000):
+            return "Error: 'limit' must be between 1 and 1000."
+        if offset < 0:
+            return "Error: 'offset' must be >= 0."
+
+        params: dict[str, Any] = {
+            "query": query.strip(),
+            "limit": limit,
+            "offset": offset,
+        }
+        if fields and fields.strip():
+            params["fields"] = fields.strip()
+
+        try:
+            result = await _paper_request(
+                "GET",
+                "/graph/v1/author/search",
+                paper_api_key=paper_api_key,
+                params=params,
+            )
+        except httpx.HTTPStatusError as exc:
+            return f"Paper API error: {exc.response.status_code} — {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error: {exc}"
+
+        if not isinstance(result, dict):
+            return "Error: unexpected response shape from author search API."
+
+        authors = result.get("data", [])
+        if not isinstance(authors, list):
+            authors = []
+
+        total = result.get("total", "?")
+        next_offset = result.get("next")
+
+        if not authors:
+            return f'No authors found for query: "{query}" (total={total}, offset={offset}).'
+
+        header = (
+            f'Authors matching "{query}" ({len(authors)} in this batch, '
+            f"total≈{total}, offset={offset}"
+        )
+        if next_offset is not None:
+            header += f", next_offset={next_offset}"
+        header += "):"
+
+        lines: list[str] = [header]
+        for idx, author in enumerate(authors, start=1):
+            if not isinstance(author, dict):
+                continue
+            block = _format_author_block(author)
+            lines.append(f"{idx}. {block[0]}")
+            lines.extend(block[1:])
+            lines.append("")
+
+        return "\n".join(lines).rstrip()
 
     app = mcp.sse_app()
     app.add_exception_handler(HTTPException, http_exception)

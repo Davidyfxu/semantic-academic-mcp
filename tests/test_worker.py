@@ -98,8 +98,8 @@ async def test_sse_connection(web_server):
             assert resources == ListResourcesResult(resources=[])
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 1
-            assert tools.tools[0].name == "paper_search"
+            assert len(tools.tools) == 2
+            assert {t.name for t in tools.tools} == {"paper_search", "author_search"}
 
             result = await session.call_tool(
                 "paper_search", arguments={"query": "test", "limit": 5}
@@ -107,4 +107,19 @@ async def test_sse_connection(web_server):
             assert len(result.content) == 1
             assert isinstance(result.content[0], TextContent)
             text = result.content[0].text
-            assert "PAPER_API_KEY" in text or "papers" in text.lower() or "paper api" in text.lower()
+            assert (
+                "PAPER_API_KEY" in text or "papers" in text.lower() or "paper api" in text.lower()
+            )
+
+            author_result = await session.call_tool(
+                "author_search",
+                arguments={"query": "test", "limit": 3},
+            )
+            assert len(author_result.content) == 1
+            assert isinstance(author_result.content[0], TextContent)
+            author_text = author_result.content[0].text
+            assert (
+                "PAPER_API_KEY" in author_text
+                or "author" in author_text.lower()
+                or "paper api" in author_text.lower()
+            )
