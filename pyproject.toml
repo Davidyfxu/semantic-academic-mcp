@@ -2,7 +2,7 @@
 name = "python-workers-mcp"
 version = "0.1.0"
 requires-python = "==3.12.*"
-dependencies = ["mcp", "structlog"]
+dependencies = ["mcp", "structlog", "httpx"]
 
 [dependency-groups]
 dev = ["workers-py", "pytest", "requests", "pytest-asyncio", "ruff"]

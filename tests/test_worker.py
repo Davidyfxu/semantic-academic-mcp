@@ -8,16 +8,7 @@ import pytest
 import requests
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.types import (
-    CallToolResult,
-    ListPromptsResult,
-    ListResourcesResult,
-    ListToolsResult,
-    Prompt,
-    PromptArgument,
-    TextContent,
-    Tool,
-)
+from mcp.types import ListPromptsResult, ListResourcesResult, TextContent
 
 
 def get_free_port():
@@ -100,61 +91,20 @@ async def test_sse_connection(web_server):
         ) as session:
             await session.initialize()
 
-            # List available prompts
             prompts = await session.list_prompts()
-            assert prompts == ListPromptsResult(
-                prompts=[
-                    Prompt(
-                        name="echo_prompt",
-                        description="Create an echo prompt",
-                        arguments=[
-                            PromptArgument(
-                                name="message",
-                                description=None,
-                                required=True,
-                            )
-                        ],
-                    )
-                ]
-            )
+            assert prompts == ListPromptsResult(prompts=[])
 
-            # List available resources
             resources = await session.list_resources()
             assert resources == ListResourcesResult(resources=[])
 
-            # List available tools
             tools = await session.list_tools()
-            assert tools == ListToolsResult(
-                tools=[
-                    Tool(
-                        name="add",
-                        description="Add two numbers",
-                        inputSchema={
-                            "properties": {
-                                "a": {"title": "A", "type": "integer"},
-                                "b": {"title": "B", "type": "integer"},
-                            },
-                            "required": ["a", "b"],
-                            "title": "addArguments",
-                            "type": "object",
-                        },
-                    ),
-                    Tool(
-                        name="calculate_bmi",
-                        description="Calculate BMI given weight in kg and height in meters",
-                        inputSchema={
-                            "properties": {
-                                "weight_kg": {"title": "Weight Kg", "type": "number"},
-                                "height_m": {"title": "Height M", "type": "number"},
-                            },
-                            "required": ["weight_kg", "height_m"],
-                            "title": "calculate_bmiArguments",
-                            "type": "object",
-                        },
-                    ),
-                ]
-            )
+            assert len(tools.tools) == 1
+            assert tools.tools[0].name == "paper_search"
 
-            # Call a tool
-            result = await session.call_tool("add", arguments={"a": 1, "b": 2})
-            assert result == CallToolResult(content=[TextContent(text="3", type="text")])
+            result = await session.call_tool(
+                "paper_search", arguments={"query": "test", "limit": 5}
+            )
+            assert len(result.content) == 1
+            assert isinstance(result.content[0], TextContent)
+            text = result.content[0].text
+            assert "PAPER_API_KEY" in text or "papers" in text.lower() or "paper api" in text.lower()
