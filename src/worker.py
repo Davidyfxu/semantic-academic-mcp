@@ -7,15 +7,11 @@ Tools exposed:
 Transport: SSE via ``mcp.sse_app()`` on Cloudflare Workers (Durable Object).
 """
 
-from __future__ import annotations
-
 import asyncio
 import os
 from typing import Any
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
-from starlette.middleware.cors import CORSMiddleware
 from workers import DurableObject
 
 from exceptions import HTTPException, http_exception
@@ -40,6 +36,9 @@ def _env_str(env: Any, key: str, default: str = "") -> str:
 
 
 def setup_server(env: Any = None):
+    from mcp.server.fastmcp import Context, FastMCP
+    from starlette.middleware.cors import CORSMiddleware
+
     paper_url = _env_str(env, "PAPER_URL", "https://ai4scholar.net")
     fallback_paper_api_key = _env_str(env, "PAPER_API_KEY", "")
 
