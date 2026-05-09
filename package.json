@@ -1,0 +1,15 @@
+{
+	"name": "semantic-academic-mcp",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Python Workers MCP Demo",
+	"scripts": {
+		"build": "uv run pywrangler sync",
+		"dev": "uv run pywrangler dev",
+		"deploy": "uv run pywrangler deploy",
+		"type-check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"wrangler": "^4.79.0"
+	}
+}
