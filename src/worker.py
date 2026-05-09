@@ -60,6 +60,7 @@ title, abstract, publication year, citation count, and links.""",
     def _build_headers(paper_api_key: str) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
+            "Accept-Encoding": "identity",
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
