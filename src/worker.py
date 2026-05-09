@@ -14,6 +14,8 @@ import os
 from typing import Any
 
 import httpx
+from mcp.server.fastmcp import Context, FastMCP
+from starlette.middleware.cors import CORSMiddleware
 from workers import DurableObject
 
 from exceptions import HTTPException, http_exception
@@ -38,11 +40,8 @@ def _env_str(env: Any, key: str, default: str = "") -> str:
 
 
 def setup_server(env: Any = None):
-    from starlette.middleware.cors import CORSMiddleware
-    from mcp.server.fastmcp import FastMCP
-
     paper_url = _env_str(env, "PAPER_URL", "https://ai4scholar.net")
-    paper_api_key = _env_str(env, "PAPER_API_KEY", "")
+    fallback_paper_api_key = _env_str(env, "PAPER_API_KEY", "")
 
     mcp = FastMCP(
         name="Paper Search",
@@ -50,20 +49,29 @@ def setup_server(env: Any = None):
 title, abstract, publication year, citation count, and links.""",
     )
 
-    def _build_headers() -> dict[str, str]:
+    def _paper_api_key_from_context(ctx: Context) -> str:
+        request = ctx.request_context.request
+        if request is not None:
+            paper_api_key = request.headers.get("x-paper-api-key", "").strip()
+            if paper_api_key:
+                return paper_api_key
+
+        return fallback_paper_api_key
+
+    def _build_headers(paper_api_key: str) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
-        if paper_api_key:
-            headers["Authorization"] = f"Bearer {paper_api_key}"
+        headers["Authorization"] = f"Bearer {paper_api_key}"
         return headers
 
     async def _paper_request(
         method: str,
         path: str,
         *,
+        paper_api_key: str,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any] | list[Any]:
@@ -76,7 +84,7 @@ title, abstract, publication year, citation count, and links.""",
                     response = await client.request(
                         method=method,
                         url=url,
-                        headers=_build_headers(),
+                        headers=_build_headers(paper_api_key),
                         params=params,
                         json=json_body,
                     )
@@ -137,6 +145,7 @@ title, abstract, publication year, citation count, and links.""",
     @mcp.tool()
     async def paper_search(
         query: str,
+        ctx: Context,
         limit: int = 30,
     ) -> str:
         """Search scholarly papers.
@@ -148,10 +157,11 @@ title, abstract, publication year, citation count, and links.""",
         limit : int
             Number of results (1-100). Default 30.
         """
+        paper_api_key = _paper_api_key_from_context(ctx)
         if not paper_api_key:
             return (
-                "Error: PAPER_API_KEY is not set. Configure the secret or "
-                "environment variable on the Worker."
+                "Error: missing paper API key. Configure X-Paper-API-Key in "
+                "your MCP client headers, or set PAPER_API_KEY on the Worker."
             )
 
         if not query.strip():
@@ -169,7 +179,12 @@ title, abstract, publication year, citation count, and links.""",
         }
 
         try:
-            result = await _paper_request("GET", "/graph/v1/paper/search", params=params)
+            result = await _paper_request(
+                "GET",
+                "/graph/v1/paper/search",
+                paper_api_key=paper_api_key,
+                params=params,
+            )
         except httpx.HTTPStatusError as exc:
             return f"Paper API error: {exc.response.status_code} — {exc}"
         except httpx.RequestError as exc:
@@ -206,7 +221,12 @@ title, abstract, publication year, citation count, and links.""",
 
     app = mcp.sse_app()
     app.add_exception_handler(HTTPException, http_exception)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     return mcp, app
 
 
